@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+contexto.json
+intercambio/
+*.tmp
+schema_temporal/
+*.zip
