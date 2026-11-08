@@ -50,24 +50,25 @@ def cargar_process_events():
 
 
 def restaurar_cursor_ocupado():
-    """Quita una sola vez el cursor de espera de Qt al iniciar la escucha."""
+    """Desapila todos los cursores de espera (WaitCursor/BusyCursor) de Qt."""
     try:
         qt = ctypes.CDLL('Qt5Gui_pf.dll')
         obtener = getattr(qt, '?overrideCursor@QGuiApplication@pf@@SAPEAVQCursor@2@XZ')
         obtener.restype = ctypes.c_void_p
-        cursor = obtener()
-        if not cursor:
-            return False
         forma = getattr(qt, '?shape@QCursor@pf@@QEBA?AW4CursorShape@Qt@2@XZ')
         forma.argtypes = [ctypes.c_void_p]
         forma.restype = ctypes.c_int
-        if forma(cursor) not in (3, 16):  # Qt::WaitCursor y Qt::BusyCursor
-            return False
         restaurar = getattr(qt, '?restoreOverrideCursor@QGuiApplication@pf@@SAXXZ')
         restaurar.argtypes = []
         restaurar.restype = None
-        restaurar()
-        return True
+        quitados = 0
+        for _ in range(8):
+            cursor = obtener()
+            if not cursor or forma(cursor) not in (3, 16):  # Qt::WaitCursor y Qt::BusyCursor
+                break
+            restaurar()
+            quitados += 1
+        return quitados > 0
     except (AttributeError, OSError):
         return False
 
@@ -129,7 +130,8 @@ def main():
             peticiones = sorted(CARPETA.glob('peticion_*.json'), key=lambda p: p.stat().st_mtime)
             if peticiones:
                 for peticion in peticiones[:10]:
-                    atender(app, peticion)
+                    agente_temporal.atender(app, peticion)
+                    restaurar_cursor_ocupado()
                     if process_events is not None:
                         try:
                             process_events(0, 50)
@@ -141,10 +143,12 @@ def main():
                 proyecto_anterior = proyecto_actual
                 if proyecto_actual:
                     refrescar_diagrama_al_activar(app)
+                    restaurar_cursor_ocupado()
 
             ahora = time.time()
             if ahora - ultimo_latido >= 1.0:
                 ultimo_latido = ahora
+                restaurar_cursor_ocupado()
                 try:
                     (CARPETA / 'latido_timer.json').write_text(
                         json.dumps({'latido_unix': ahora, 'pid': os.getpid(), 'qt_events': process_events is not None}),
