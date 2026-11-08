@@ -3,7 +3,8 @@ import math
 
 
 def crear(app, proyecto_ruta, terminal_ruta, diagrama_ruta, nombre, potencia_nominal_mva,
-          potencia_activa_mw, potencia_reactiva_mvar=0.0):
+          potencia_activa_mw, potencia_reactiva_mvar=0.0, revertir_en_error=True,
+          limpiar_graficos_extra=False):
     proyecto = app.GetActiveProject()
     if not proyecto or proyecto.GetFullName() != proyecto_ruta:
         raise ValueError('El proyecto activo no coincide con la ruta indicada.')
@@ -36,30 +37,43 @@ def crear(app, proyecto_ruta, terminal_ruta, diagrama_ruta, nombre, potencia_nom
     diagramas = app.GetProjectFolder('dia')
     coincidencias = [d for d in (diagramas.GetContents('*.IntGrfnet', 1) if diagramas else [])
                      if d.GetFullName() == diagrama_ruta]
-    if not pagina or len(coincidencias) != 1 or pagina.loc_name != coincidencias[0].loc_name:
+    actual_dia = app.GetCurrentDiagram() if hasattr(app, 'GetCurrentDiagram') else None
+    if not pagina or len(coincidencias) != 1 or (pagina.loc_name != coincidencias[0].loc_name and actual_dia != coincidencias[0]):
         raise ValueError('Abra el diagrama de red del proyecto antes de crear la máquina.')
     diagrama = coincidencias[0]
 
-    creados = []
+    objetos_creados = []
+    antes_graficos = {o.GetFullName() for o in (diagrama.GetContents('*.IntGrf', 1) or [])}
     try:
         tipo = biblioteca.CreateObject('TypSym', tipo_nombre)
         if not tipo:
             raise RuntimeError('No se pudo crear el tipo.')
-        creados.append(tipo.GetFullName())
+        objetos_creados.append(tipo)
         tipo.SetAttribute('sgn', potencia_nominal_mva)
         tipo.SetAttribute('ugn', terminal.GetAttribute('uknom'))
         tipo.SetAttribute('cosn', 1.0)
+        for attr_din, val_din in (
+            ('xd', 1.8), ('xq', 1.7), ('xds', 0.25), ('xqs', 0.25),
+            ('xdss', 0.18), ('xqss', 0.18), ('xl', 0.1),
+            ('td0s', 5.0), ('tq0s', 1.0), ('td0ss', 0.03), ('tq0ss', 0.05),
+            ('tag', 4.0), ('rstr', 0.005), ('x0', 0.1), ('x2', 0.18),
+        ):
+            if tipo.HasAttribute(attr_din):
+                try:
+                    tipo.SetAttribute(attr_din, val_din)
+                except Exception:
+                    pass
         maquina = red.CreateObject('ElmSym', nombre)
         if not maquina:
             raise RuntimeError('No se pudo crear la máquina.')
-        creados.append(maquina.GetFullName())
+        objetos_creados.append(maquina)
         maquina.SetAttribute('typ_id', tipo)
         maquina.SetAttribute('pgini', potencia_activa_mw)
         maquina.SetAttribute('qgini', potencia_reactiva_mvar)
         cubiculo = terminal.CreateObject('StaCubic', nombre + ' Cubiculo')
         if not cubiculo:
             raise RuntimeError('No se pudo crear el cubículo.')
-        creados.append(cubiculo.GetFullName())
+        objetos_creados.append(cubiculo)
         maquina.SetAttribute('bus1', cubiculo)
         if maquina.GetAttribute('bus1').GetAttribute('cterm').GetFullName() != terminal_ruta:
             raise RuntimeError('No se pudo verificar la conexión.')
@@ -77,10 +91,21 @@ def crear(app, proyecto_ruta, terminal_ruta, diagrama_ruta, nombre, potencia_nom
             comando.SetAttribute('insertionMode', modo)
         if codigo != 0:
             raise RuntimeError('Falló el comando de disposición gráfica: %s' % codigo)
-        representaciones = [o.GetFullName() for o in diagrama.GetContents('*.IntGrf', 1)
+        todos_graficos = diagrama.GetContents('*.IntGrf', 1) or []
+        representaciones = [o.GetFullName() for o in todos_graficos
                             if o.GetAttribute('pDataObj') == maquina]
         if not representaciones:
             raise RuntimeError('No se encontró una representación gráfica de la máquina.')
+        graficos_extra_eliminados = []
+        if limpiar_graficos_extra:
+            for g in todos_graficos:
+                ruta_g = g.GetFullName()
+                if ruta_g not in antes_graficos and g.GetAttribute('pDataObj') not in (maquina, terminal):
+                    try:
+                        if g.Delete() == 0:
+                            graficos_extra_eliminados.append(ruta_g)
+                    except Exception:
+                        pass
         app.SetGraphicUpdate(1)
         app.Rebuild(1)
         return {'maquina': maquina.GetFullName(), 'terminal': terminal_ruta,
@@ -88,6 +113,36 @@ def crear(app, proyecto_ruta, terminal_ruta, diagrama_ruta, nombre, potencia_nom
                 'diagramas': representaciones, 'potencia_nominal_mva': potencia_nominal_mva,
                 'potencia_activa_mw': potencia_activa_mw,
                 'potencia_reactiva_mvar': potencia_reactiva_mvar,
+                'graficos_extra_eliminados': graficos_extra_eliminados,
                 'nota': 'Tipo con valores de prueba por defecto; no se ejecutó flujo. El layout puede añadir otros elementos ausentes.'}
     except Exception as exc:
-        raise RuntimeError('Creación incompleta: %s. Objetos creados que requieren revisión: %s' % (exc, creados)) from exc
+        revertidos, pendientes = [], []
+        if revertir_en_error:
+            for g in (diagrama.GetContents('*.IntGrf', 1) or []):
+                ruta_g = g.GetFullName()
+                if ruta_g not in antes_graficos:
+                    try:
+                        if g.Delete() == 0:
+                            revertidos.append(ruta_g)
+                    except Exception:
+                        pass
+            for obj in reversed(objetos_creados):
+                ruta_obj = obj.GetFullName()
+                try:
+                    if obj.Delete() == 0:
+                        revertidos.append(ruta_obj)
+                    else:
+                        pendientes.append(ruta_obj)
+                except Exception:
+                    pendientes.append(ruta_obj)
+            try:
+                app.SetGraphicUpdate(1)
+                app.Rebuild(1)
+            except Exception:
+                pass
+        else:
+            pendientes = [o.GetFullName() for o in objetos_creados]
+        raise RuntimeError(
+            'Creación incompleta: %s. Objetos revertidos: %s. Objetos pendientes de revisión: %s'
+            % (exc, revertidos, pendientes)
+        ) from exc

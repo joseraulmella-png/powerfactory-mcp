@@ -58,7 +58,16 @@ def atender(app, ruta):
                 if not isinstance(ejecutar, bool):
                     raise ValueError('ejecutar debe ser booleano.')
                 mostrar_en_interfaz = bool(parametros.get('mostrar_en_interfaz', True))
-                datos = analizar_lineas(app, parametros.get('umbral', 100.0), ejecutar, mostrar_en_interfaz=mostrar_en_interfaz)
+                incluir_transformadores = bool(parametros.get('incluir_transformadores', True))
+                datos = analizar_lineas(
+                    app,
+                    parametros.get('umbral', 100.0),
+                    ejecutar,
+                    mostrar_en_interfaz=mostrar_en_interfaz,
+                    incluir_transformadores=incluir_transformadores,
+                    v_min_pu=parametros.get('v_min_pu', 0.95),
+                    v_max_pu=parametros.get('v_max_pu', 1.05),
+                )
             resultado = {'id': identificador, 'ok': True, 'resultado': datos}
     except Exception as exc:
         resultado = {'id': identificador, 'ok': False, 'error': str(exc), 'detalle': traceback.format_exc()}
