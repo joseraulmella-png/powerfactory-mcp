@@ -5,3 +5,6 @@ intercambio/
 *.tmp
 schema_temporal/
 *.zip
+.runtime-python/
+.uv-cache/
+.opc-deps/
