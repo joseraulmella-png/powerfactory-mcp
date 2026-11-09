@@ -8,3 +8,4 @@ schema_temporal/
 .runtime-python/
 .uv-cache/
 .opc-deps/
+panel_mcp_error.log

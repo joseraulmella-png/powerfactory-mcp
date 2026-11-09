@@ -97,10 +97,16 @@ def inventariar(app, limite=10000):
     return resultado
 
 
-def analizar_lineas(app, umbral=100.0, ejecutar=False, mostrar_en_interfaz=True):
-    """Consulta carga de lineas relevantes con resultados de flujo validos."""
+def analizar_lineas(app, umbral=100.0, ejecutar=False, mostrar_en_interfaz=True,
+                    incluir_transformadores=True, v_min_pu=0.95, v_max_pu=1.05):
+    """Consulta carga de lineas, transformadores y perfil de tensiones con resultados de flujo validos."""
     if isinstance(umbral, bool) or not isinstance(umbral, (int, float)) or not math.isfinite(umbral) or umbral < 0:
         raise ValueError('El umbral debe ser un numero finito no negativo.')
+    for v in (v_min_pu, v_max_pu):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+            raise ValueError('Los limites de tension deben ser numeros finitos positivos.')
+    if v_min_pu > v_max_pu:
+        raise ValueError('v_min_pu no puede superar a v_max_pu.')
     proyecto, caso = app.GetActiveProject(), app.GetActiveStudyCase()
     if proyecto is None or caso is None:
         raise RuntimeError('Se requiere proyecto y caso de estudio activos.')
@@ -139,7 +145,10 @@ def analizar_lineas(app, umbral=100.0, ejecutar=False, mostrar_en_interfaz=True)
     lineas = app.GetCalcRelevantObjects('*.ElmLne') or []
     salida = {'capturado_unix': time.time(), 'proyecto': describir(proyecto), 'caso_estudio': describir(caso),
               'flujo_ejecutado': ejecutar, 'umbral_porcentaje': umbral, 'total_lineas_relevantes': len(lineas),
-              'fuera_de_servicio': 0, 'lineas_analizadas': 0, 'lineas_sobre_umbral': [], 'errores': []}
+              'fuera_de_servicio': 0, 'lineas_analizadas': 0, 'lineas_sobre_umbral': [],
+              'transformadores_analizados': 0, 'transformadores_sobre_umbral': [],
+              'rango_tension_pu': [v_min_pu, v_max_pu], 'terminales_analizados': 0,
+              'terminales_fuera_rango_tension': [], 'errores': []}
     for linea in lineas:
         try:
             if linea.GetAttribute('outserv'):
@@ -156,17 +165,56 @@ def analizar_lineas(app, umbral=100.0, ejecutar=False, mostrar_en_interfaz=True)
         except Exception as exc:
             salida['errores'].append({'linea': describir(linea), 'error': str(exc)})
     salida['lineas_sobre_umbral'].sort(key=lambda x: x['carga_porcentaje'], reverse=True)
+
+    if incluir_transformadores:
+        for trafo in (app.GetCalcRelevantObjects('*.ElmTr2') or []):
+            try:
+                if trafo.GetAttribute('outserv'):
+                    continue
+                carga_tr = float(trafo.GetAttribute('c:loading'))
+                if not math.isfinite(carga_tr):
+                    continue
+                salida['transformadores_analizados'] += 1
+                if carga_tr > umbral:
+                    reg_tr = detalle(trafo)
+                    reg_tr['carga_porcentaje'] = carga_tr
+                    salida['transformadores_sobre_umbral'].append(reg_tr)
+            except Exception as exc:
+                salida['errores'].append({'transformador': describir(trafo), 'error': str(exc)})
+        salida['transformadores_sobre_umbral'].sort(key=lambda x: x['carga_porcentaje'], reverse=True)
+
+    for term in (app.GetCalcRelevantObjects('*.ElmTerm') or []):
+        try:
+            if term.GetAttribute('outserv'):
+                continue
+            u_pu = float(term.GetAttribute('m:u'))
+            if not math.isfinite(u_pu):
+                raise ValueError('Resultado de tension no finito.')
+            salida['terminales_analizados'] += 1
+            if u_pu < v_min_pu or u_pu > v_max_pu:
+                reg_term = detalle(term)
+                reg_term['tension_pu'] = round(u_pu, 5)
+                reg_term['desviacion'] = 'subtension' if u_pu < v_min_pu else 'sobretension'
+                salida['terminales_fuera_rango_tension'].append(reg_term)
+        except Exception as exc:
+            salida['errores'].append({'terminal': describir(term), 'error': str(exc)})
+    salida['terminales_fuera_rango_tension'].sort(key=lambda x: abs(x['tension_pu'] - 1.0), reverse=True)
+
     if ejecutar:
         salida['duracion_flujo_ms'] = duracion_flujo_ms
         salida['mostrar_en_interfaz'] = mostrar_en_interfaz
         if mostrar_en_interfaz:
             try:
                 app.PrintInfo(
-                    'MCP Flujo en vivo: %s ms | %d lineas analizadas | %d sobre %.1f%%'
-                    % (duracion_flujo_ms, salida['lineas_analizadas'], len(salida['lineas_sobre_umbral']), umbral)
+                    'MCP Flujo en vivo: %s ms | %d lineas (%d > %.1f%%) | %d trafos (%d > %.1f%%) | %d barras fuera de [%.2f, %.2f] p.u.'
+                    % (duracion_flujo_ms, salida['lineas_analizadas'], len(salida['lineas_sobre_umbral']), umbral,
+                       salida['transformadores_analizados'], len(salida['transformadores_sobre_umbral']), umbral,
+                       len(salida['terminales_fuera_rango_tension']), v_min_pu, v_max_pu)
                 )
                 for item in salida['lineas_sobre_umbral'][:10]:
-                    app.PrintWarn('  Sobrecarga: %s -> %.2f%%' % (item['nombre'], item['carga_porcentaje']))
+                    app.PrintWarn('  Sobrecarga linea: %s -> %.2f%%' % (item['nombre'], item['carga_porcentaje']))
+                for item in salida['transformadores_sobre_umbral'][:10]:
+                    app.PrintWarn('  Sobrecarga trafo: %s -> %.2f%%' % (item['nombre'], item['carga_porcentaje']))
             except Exception:
                 pass
     return salida

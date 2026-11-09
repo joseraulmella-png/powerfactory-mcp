@@ -110,6 +110,9 @@ def main():
     process_events = cargar_process_events()
     app.PrintInfo('MCP: sesion de control en vivo activa (procesando eventos graficos en tiempo real).')
     restaurar_cursor_ocupado()
+    # Reactiva el redibujado antes de iniciar la escucha continua.
+    app.SetGraphicUpdate(1)
+    app.Rebuild(1)
     proyecto_anterior = ruta_proyecto_activo(app)
 
     limite = time.monotonic() + DURACION_SESION_SEGUNDOS
