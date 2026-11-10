@@ -179,7 +179,9 @@ def atender(req):
         version = req.get('params', {}).get('protocolVersion', '2024-11-05')
         return {'protocolVersion': version, 'capabilities': {'tools': {}},
                 'serverInfo': {'name': 'powerfactory-contexto', 'version': '0.3.0'},
-                'instructions': 'Cuando la escucha continua (MCP Consulta Puntual) esta activa en PowerFactory, las herramientas de sesion responden directamente en un solo paso. Si no esta activa, devuelven un id para ejecutar MCP Consulta Puntual y llamar recoger_contexto.'}
+                'instructions': ('Cuando la escucha continua (MCP Consulta Puntual) esta activa, las herramientas de sesion responden directamente; si no, pueden devolver un id para recoger_contexto. '
+                                 'Para interpretar estudios, consulte AGENTS.md en la carpeta del servidor. Identifique proyecto, caso, alimentador, escenarios, variaciones y etapas activas; verifique la validez del flujo y los limites aplicables antes de concluir. '
+                                 'Determine por topologia si cada elemento pertenece al alimentador; una red o nombre por si solos no lo acreditan. Informe resultados con y sin obras por separado y no atribuya una causa unica a un flujo no convergente sin comprobarla.')}
     if metodo == 'ping':
         return {}
     if metodo == 'tools/list':
